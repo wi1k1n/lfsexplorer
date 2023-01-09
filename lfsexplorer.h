@@ -1,6 +1,16 @@
 #ifndef LFSEXPLORER_H__
 #define LFSEXPLORER_H__
 
+#include <map>
+#include <unordered_set>
+#include <vector>
+#include <functional>
+#include "LittleFS.h"
+
+#define LFSE_SERIAL_BUFFER_LENGTH 64
+#define LFSE_FILE_BUFFER_LENGTH 64
+
+////////////////////////////////////////////////////////////////////////////////
 #ifndef __PRIVATE_LOG_PREAMBULE
 #define __PRIVATE_LOG_PREAMBULE	   (Serial.print(millis())+\
 									Serial.print(" | ")+\
@@ -29,15 +39,7 @@
 #ifndef LOGLN
 #define LOGLN(txt)		(Serial.println(txt))
 #endif
-
-#include <map>
-#include <unordered_set>
-#include <vector>
-#include <functional>
-#include "LittleFS.h"
-
-// #define LFSE_COMMAND_MAX_LENGTH 10
-#define LFSE_SERIAL_BUFFER_LENGTH 64
+////////////////////////////////////////////////////////////////////////////////
 
 inline static bool isValidFSNameChar(char c) {
 	return isAlphaNumeric(c) || c == '-' || c == '.';
@@ -163,6 +165,7 @@ private:
 	static void cmdMkdir(LFSECommand& cmd);
 	static void cmdMv(LFSECommand& cmd);
 	static void cmdRm(LFSECommand& cmd);
+	static void cmdCp(LFSECommand& cmd);
 	static void cmdTouch(LFSECommand& cmd);
 	static void cmdWrite(LFSECommand& cmd);
 	static void cmdCat(LFSECommand& cmd);

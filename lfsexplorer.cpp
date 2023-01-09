@@ -9,6 +9,7 @@ std::map<String, cmdInfo> DEBUG::lfseCmdMap = {
 	cmdMapEntry("mkdir", cmdInfo(cmdMkdir, "[dirname]", "create directory (not recursive)")),
 	cmdMapEntry("mv", cmdInfo(cmdMv, "[path_from] [path_to]", "move and/or rename file/directory")),
 	cmdMapEntry("rm", cmdInfo(cmdRm, "[path]", "remove file/directory")),
+	cmdMapEntry("cp", cmdInfo(cmdCp, "[path_src] [path_dst]", "copy file/directory")),
 	cmdMapEntry("touch", cmdInfo(cmdTouch, "[filepath]", "create empty file")),
 	cmdMapEntry("write", cmdInfo(cmdWrite, "[\"content_args\"] [filepath]", "overwrite text content to file")),
 	cmdMapEntry("cat", cmdInfo(cmdCat, "[filepath]", "print content of the file")),
@@ -105,8 +106,71 @@ void DEBUG::cmdMv(LFSECommand& cmd) {
 		return;
 	}
 }
+void DEBUG::cmdCp(LFSECommand& cmd) {
+	// TODO: handle dot in path properly to keep the name
+	cmd.parseArgs();
+	if (checkMissingOperand(cmd, 2))
+		return;
+	uint8_t filePath1ArgIdx = cmd.getArgFirstFilenameOrLastArgIdx();
+	String userPath1(cmd._args[filePath1ArgIdx]);
+	String userPath2(cmd.getArgFirstFilenameOrLastArg(filePath1ArgIdx + 1));
+	
+	bool copyDir = cmd.isSingleLetterFlagPresent('r');
+
+	if (copyDir) {
+		if (checkInvalidFilePath(userPath1) || checkInvalidFilePath(userPath2))
+			return;
+	} else {
+		if (checkInvalidDirPath(userPath1) || checkInvalidDirPath(userPath2))
+			return;
+	}
+
+	String path1 = lfsePath.createAdjustedFromUserPath(userPath1).toString();
+	String path2 = lfsePath.createAdjustedFromUserPath(userPath2).toString();
+	if (checkDoesntExist(path1) || checkAlreadyExists(path2))
+		return;
+
+	File f = LittleFS.open(path1, "r");
+	bool isDir = f.isDirectory();
+	f.close();
+	
+	// requested to copy dirs
+	if (copyDir) {
+		if (!isDir) {
+			LOG(path1);
+			LOGLN(F(" is not a directory"));
+			return;
+		}
+		LOGLN(F("Not implemented yet!")); // TODO: implement
+		return;
+	}
+	// requested to copy files
+	if (isDir) {
+		LOG(path1);
+		LOGLN(F(" is not a file"));
+		return;
+	}
+
+	File fsrc = LittleFS.open(path1, "r");
+	if (!fsrc) {
+		LOG(F("Failed to open file "));
+		LOGLN(path1);
+		return;
+	}
+	File fdst = LittleFS.open(path2, "w");
+	if (!fsrc) {
+		LOG(F("Failed to open file "));
+		LOGLN(path2);
+		return;
+	}
+
+	char buffer[LFSE_FILE_BUFFER_LENGTH];
+	while (fsrc.available()) {
+		size_t nBytes = fsrc.readBytes(buffer, LFSE_FILE_BUFFER_LENGTH);
+		fdst.write(buffer, nBytes);
+	}
+}
 void DEBUG::cmdTouch(LFSECommand& cmd) {
-	// TODO: change to non-destructive behavior!
 	cmd.parseArgs();
 	if (checkMissingOperand(cmd))
 		return;
