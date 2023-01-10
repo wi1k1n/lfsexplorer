@@ -178,6 +178,48 @@ private:
 	static bool checkInvalidFilePath(const String& path);
 	static bool checkAlreadyExists(const String& path);
 	static bool checkDoesntExist(const String& path);
+
+	static bool readLine(File& f, String* s, uint16_t maxLen, size_t* strLength = nullptr);
+	static bool readChars(File& f, String* s, uint16_t maxLen, size_t* strLength = nullptr);
+};
+
+// A small helping struct for readLine function
+// Behaves as string if constructed with valid string
+// otherwise imitates string behavior only keeping 2 (last) chars
+struct StringLike {
+	String* _s;
+	size_t _sLength = 0;
+	char _c[2];
+	StringLike(String* sPtr) : _s(sPtr) { }
+
+	size_t length() const { return _s ? _s->length() : _sLength; }
+	StringLike& operator+=(const char& rhs) {
+		if (_s) {
+			_s += rhs;
+		} else {
+			std::swap(_c[0], _c[1]);
+			_c[0] = rhs;
+			++_sLength;
+		}
+		return *this;
+	}
+	char operator[](size_t idx) const {
+		if (_s)
+			return (*_s)[idx];
+		return _c[constrain(_sLength - idx, 0, 1)];
+	}
+	void clear() {
+		if (_s)
+			return _s->clear();
+		_sLength = 0;
+	}
+	void cut(size_t left, size_t right) { // .substring without creating new obj
+		if (_s) {
+			*_s = _s->substring(left, right);
+			return;
+		}
+		_sLength = right - left;
+	}
 };
 
 #endif // LFSEXPLORER_H__

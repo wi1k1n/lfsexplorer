@@ -116,6 +116,7 @@ void DEBUG::cmdCp(LFSECommand& cmd) {
 	String userPath2(cmd.getArgFirstFilenameOrLastArg(filePath1ArgIdx + 1));
 	
 	bool copyDir = cmd.isSingleLetterFlagPresent('r');
+	bool copyForce = cmd.isSingleLetterFlagPresent('f');
 
 	if (copyDir) {
 		if (checkInvalidFilePath(userPath1) || checkInvalidFilePath(userPath2))
@@ -127,7 +128,7 @@ void DEBUG::cmdCp(LFSECommand& cmd) {
 
 	String path1 = lfsePath.createAdjustedFromUserPath(userPath1).toString();
 	String path2 = lfsePath.createAdjustedFromUserPath(userPath2).toString();
-	if (checkDoesntExist(path1) || checkAlreadyExists(path2))
+	if (checkDoesntExist(path1) || (copyForce && checkAlreadyExists(path2)))
 		return;
 
 	File f = LittleFS.open(path1, "r");
@@ -309,23 +310,22 @@ void DEBUG::cmdRm(LFSECommand& cmd) {
 		}
 		size_t insertCursor = f.position();
 		DLOGLN(insertCursor);
-		while (f.available()) {
+		while (f.available() && lineIdx <= lineLastIdx) {
 			String line = f.readStringUntil('\n');
-			if (lineIdx < lineLastIdx) {
-				++lineIdx;
-				continue;
-			}
 			DLOGLN(line);
+
 			size_t curPos = f.position();
 			DLOGLN(curPos);
+
 			f.seek(insertCursor);
+
 			insertCursor += f.println(line);
 			DLOGLN(insertCursor);
+
 			f.seek(curPos);
+			++lineIdx;
 		}
-		f.truncate(insertCursor);
-		f.seek(0);
-		DLOGLN(f.peekAvailable());
+		// f.truncate(insertCursor);
 		f.close();
 		return;
 	}
@@ -362,33 +362,76 @@ void DEBUG::cmdCat(LFSECommand& cmd) {
 	// get flags
 	bool lineNumbers = cmd.isSingleLetterFlagPresent('n');
 	bool byteView = cmd.isSingleLetterFlagPresent('b');
-	uint16_t limitColumn = cmd.getNumericalFlagValue('c', 128);
+	bool byteViewPlain = cmd.isSingleLetterFlagPresent('p');
+	uint16_t limitColumn = cmd.getNumericalFlagValue('c', byteView ? 16 : 128);
 	uint16_t rowIdxFirst = cmd.getNumericalFlagValue('f', 0);
 	uint16_t rowIdxLast = cmd.getNumericalFlagValue('l', 64);
 
 	uint16_t lineIdx = 0;
+	uint16_t byteCursor = 0; // helps to keep byte values in table
 	while (f.available() && lineIdx <= rowIdxLast) {
-		String line = f.readStringUntil('\n');
+		// TODO: count lines in line mode, bytes -> in byte mode
 		if (lineIdx < rowIdxFirst) {
+			readLine(f, nullptr, 0); // simply skip the line
 			++lineIdx;
 			continue;
 		}
-		if (lineNumbers) {
-			LOG(lineIdx + 1);
-			LOG(F("\t"));
+		String line;
+		if (byteView) { // normal mode
+			if (byteViewPlain) {
+				readChars(f, &line, limitColumn);
+				for (const char& c : line) {
+					LOGF("%02x", c);
+					LOG(F(" "));
+				}
+				LOGLN("");
+				++lineIdx;
+				continue;
+			} else {
+				bool completeLine = readLine(f, &line, limitColumn);
+				for (const char& c : line) {
+					LOGF("%02x", c);
+					LOG(F(" "));
+				}
+				if (completeLine) {
+					LOGF("%02x %02x", '\r', '\n');
+					++lineIdx;
+					continue;
+				}
+			}
 		}
+
+
+
 		if (byteView) {
 			for (uint16_t i = 0; i < line.length() && i < limitColumn; ++i) {
 				LOGF("%02x", line[i]);
+				++byteCursor;
+				if (byteCursor % limitColumn == 0) {
+					LOGLN("");
+					continue;
+				}
 				LOG(F(" "));
 			}
+			if (lineEnded) {
+				LOG("0d"); // \r
+				++byteCursor;
+				if (byteCursor % limitColumn == 0) {
+					LOGLN("");
+				}
+				LOG()
+			}
 		} else {
+			if (lineNumbers) {
+				LOG(lineIdx + 1);
+				LOG(F("\t"));
+			}
 			LOG(line.substring(0, min((uint16_t)(line.length()-1), limitColumn)));
-		}
-		if (limitColumn < line.length()) {
-			LOGLN(F("..."));
-		} else {
-			LOGLN();
+			if (limitColumn < line.length()) {
+				LOGLN(F("..."));
+			} else {
+				LOGLN();
+			}
 		}
 		++lineIdx;
 	}
@@ -629,6 +672,100 @@ uint8_t LFSECommand::getArgFirstFilenameOrLastArgIdx(uint8_t startIdx) const {
 
 LFSECommand::Arg LFSECommand::getArgFirstFilenameOrLastArg(uint8_t startIdx) const {
 	return _args[getArgFirstFilenameOrLastArgIdx(startIdx)];
+}
+
+// String s contains all chars before CRLF, but at most maxLen chars
+// String s doesn't contain CRLF
+// String s can be nullptr, then number of bytes that've been read can be accessed via strLength
+// f.position() points to the char next from the (s.length()-1)th
+// maxLen can be 0, then there's no limit
+// ATTENTION! maxLen == 0 recommended only with str == nullptr
+// returns true if CRLF follows the (s.length()-1)th char
+bool DEBUG::readLine(File& f, String* str, uint16_t maxLen, size_t* strLength) {
+	// str can be nullptr, StringLike class handles it properly
+	StringLike s(str);
+	s.clear();
+	// problem with file
+	if (!f) {
+		return false;
+	}
+
+	char lastChar = '\0';
+	bool brokeByLen = false; // TODO: use byte flags here
+	bool brokenByCRLF = false;
+	size_t originalPosition = f.position();
+	while (f.available()) {
+		if (maxLen && (s.length() >= maxLen + 2)) {
+			brokeByLen = true;
+			break;
+		}
+		char c = (char)f.read();
+		s += c;
+		if (c == '\n' && lastChar == '\r') {
+			brokenByCRLF = true;
+			break;
+		}
+		lastChar = c;
+	}
+
+	// s.length() == maxLen + 2
+	if (brokeByLen) {
+		// s cannot end with crlf
+		// even if s.last == cr, s.length is already too big,
+		// so in any case return false
+		f.seek(originalPosition + s.length() - 2);
+		s.cut(0, s.length() - 2);
+		if (strLength) s.length();
+		return false;
+	}
+
+	int16_t d = s.length() - maxLen;
+
+	// crlf are last 2 chars of s
+	if (brokenByCRLF) {
+		f.seek(originalPosition + s.length() - 2);
+		s.cut(0, s.length() - 2);
+		if (strLength) s.length();
+		return true;
+	}
+
+	// got to the end of file without seeing crlf
+	if (d > 0) { // exceeded maxLen
+		f.seek(originalPosition + maxLen);
+		s.cut(0, maxLen);
+		if (strLength) s.length();
+	}
+	return false;
+}
+// Same as readLine, but doesn't stop on CRLF
+// returns true if got to the end of file before exceeding maxLen
+bool DEBUG::readChars(File& f, String* str, uint16_t maxLen, size_t* strLength) {
+	// str can be nullptr, StringLike class handles it properly
+	StringLike s(str);
+	s.clear();
+	// problem with file
+	if (!f) {
+		return false;
+	}
+	
+	bool brokeByLen = false;
+	size_t originalPosition = f.position();
+	while (f.available()) {
+		if (maxLen && (s.length() >= maxLen)) {
+			brokeByLen = true;
+			break;
+		}
+		char c = (char)f.read();
+		s += c;
+	}
+
+	// s.length() == maxLen
+	if (brokeByLen) {
+		return false;
+	}
+	// went to the end of file
+	if (strLength) s.length();
+	return true;
 }
 
 void LFSECommand::parseArgs() {
