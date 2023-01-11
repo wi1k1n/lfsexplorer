@@ -7,37 +7,48 @@
 #include <functional>
 #include "LittleFS.h"
 
-#define LFSE_SERIAL_BUFFER_LENGTH 64
+#define LFSE_SERIAL_BUFFER_LENGTH 256
 #define LFSE_FILE_BUFFER_LENGTH 64
 
 ////////////////////////////////////////////////////////////////////////////////
+
+#ifdef CUSTOM_UART
+#include "CustomUART.h"
+#define _UART_ uart
+#else
+#define _UART_ Serial
+#endif
+
 #ifndef __PRIVATE_LOG_PREAMBULE
-#define __PRIVATE_LOG_PREAMBULE	   (Serial.print(millis())+\
-									Serial.print(" | ")+\
-									Serial.print(__FILE__)+\
-									Serial.print(F(":"))+\
-									Serial.print(__LINE__)+\
-									Serial.print(F(":"))+\
-									Serial.print(__func__)+\
-									Serial.print(F("() - ")))
+#define __PRIVATE_LOG_PREAMBULE	   (_UART_.print(millis())+\
+									_UART_.print(" | ")+\
+									_UART_.print(__FILE__)+\
+									_UART_.print(F(":"))+\
+									_UART_.print(__LINE__)+\
+									_UART_.print(F(":"))+\
+									_UART_.print(__func__)+\
+									_UART_.print(F("() - ")))
 #endif
 #ifndef DLOGLN
-#define DLOGLN(txt)		(__PRIVATE_LOG_PREAMBULE+Serial.println(txt))
+#define DLOGLN(txt)		(__PRIVATE_LOG_PREAMBULE+_UART_.println(txt))
 #endif
 #ifndef DLOGF
-#define DLOGF(fmt, ...)	(__PRIVATE_LOG_PREAMBULE+Serial.printf(fmt, __VA_ARGS__))
+#define DLOGF(fmt, ...)	(__PRIVATE_LOG_PREAMBULE+_UART_.printf(fmt, __VA_ARGS__))
 #endif
 #ifndef DLOG
-#define DLOG(txt)    	(__PRIVATE_LOG_PREAMBULE+Serial.print(txt))
+#define DLOG(txt)    	(__PRIVATE_LOG_PREAMBULE+_UART_.print(txt))
 #endif
 #ifndef LOG
-#define LOG(txt)    	(Serial.print(txt))
+#define LOG(txt)    	(_UART_.print(txt))
 #endif
 #ifndef LOGF
-#define LOGF(fmt, ...)	(Serial.printf(fmt, __VA_ARGS__))
+#define LOGF(fmt, ...)	(_UART_.printf(fmt, __VA_ARGS__))
+#endif
+#ifndef LOGFLN
+#define LOGFLN(fmt, ...)	(_UART_.printf(fmt, __VA_ARGS__)+_UART_.println())
 #endif
 #ifndef LOGLN
-#define LOGLN(txt)		(Serial.println(txt))
+#define LOGLN(txt)		(_UART_.println(txt))
 #endif
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -148,7 +159,8 @@ typedef std::pair<String, cmdInfo> cmdMapEntry;
 
 class DEBUG {
 public:
-	static void LittleFSExplorer();
+	static void LittleFSExplorer(const String& cmd);
+	static void _debug();
 private:
 	static std::map<String, cmdInfo> lfseCmdMap;
 	static char lfseBuffer[];
@@ -179,26 +191,25 @@ private:
 	static bool checkAlreadyExists(const String& path);
 	static bool checkDoesntExist(const String& path);
 
-	static bool readLine(File& f, String* s, uint16_t maxLen, size_t* strLength = nullptr);
-	static bool readChars(File& f, String* s, uint16_t maxLen, size_t* strLength = nullptr);
+	static bool readLine(File& f, String* s, uint16_t maxLen, size_t* strLenOut = nullptr, bool addCRLF = false);
+	static bool readChars(File& f, String* s, uint16_t maxLen, size_t* strLenOut = nullptr);
+	static uint8_t _debugIdx;
+	static void customDebugCode(const String&);
 };
 
 // A small helping struct for readLine function
-// Behaves as string if constructed with valid string
-// otherwise imitates string behavior only keeping 2 (last) chars
+// Behaves as string if constructed with a valid string pointer
+// o/w very cheaply imitates string behavior
 struct StringLike {
 	String* _s;
 	size_t _sLength = 0;
-	char _c[2];
 	StringLike(String* sPtr) : _s(sPtr) { }
 
 	size_t length() const { return _s ? _s->length() : _sLength; }
 	StringLike& operator+=(const char& rhs) {
 		if (_s) {
-			_s += rhs;
+			*_s += rhs;
 		} else {
-			std::swap(_c[0], _c[1]);
-			_c[0] = rhs;
 			++_sLength;
 		}
 		return *this;
@@ -206,7 +217,7 @@ struct StringLike {
 	char operator[](size_t idx) const {
 		if (_s)
 			return (*_s)[idx];
-		return _c[constrain(_sLength - idx, 0, 1)];
+		return '\0';
 	}
 	void clear() {
 		if (_s)

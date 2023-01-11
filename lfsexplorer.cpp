@@ -338,6 +338,7 @@ void DEBUG::cmdRm(LFSECommand& cmd) {
 	return;
 }
 void DEBUG::cmdCat(LFSECommand& cmd) {
+	// TODO: too long function, better split into semantic parts!
 	cmd.parseArgs();
 	if (checkMissingOperand(cmd))
 		return;
@@ -360,80 +361,93 @@ void DEBUG::cmdCat(LFSECommand& cmd) {
 	}
 	
 	// get flags
+	// TODO: it'd be nice to have numerical flags and distinguish them positionally
 	bool lineNumbers = cmd.isSingleLetterFlagPresent('n');
 	bool byteView = cmd.isSingleLetterFlagPresent('b');
-	bool byteViewPlain = cmd.isSingleLetterFlagPresent('p');
+	bool plainMode = cmd.isSingleLetterFlagPresent('p');
 	uint16_t limitColumn = cmd.getNumericalFlagValue('c', byteView ? 16 : 128);
+	bool flagF = cmd.isSingleLetterFlagPresent('f');
+	bool flagL = cmd.isSingleLetterFlagPresent('l');
 	uint16_t rowIdxFirst = cmd.getNumericalFlagValue('f', 0);
-	uint16_t rowIdxLast = cmd.getNumericalFlagValue('l', 64);
+	uint16_t rowIdxLast = cmd.getNumericalFlagValue('l', 0);
 
-	uint16_t lineIdx = 0;
-	uint16_t byteCursor = 0; // helps to keep byte values in table
-	while (f.available() && lineIdx <= rowIdxLast) {
-		// TODO: count lines in line mode, bytes -> in byte mode
-		if (lineIdx < rowIdxFirst) {
-			readLine(f, nullptr, 0); // simply skip the line
-			++lineIdx;
-			continue;
+	if (!limitColumn) {
+		LOGLN(F("cat: -c cannot be 0"));
+		return;
+	}
+	if (!byteView && plainMode) {
+		LOGLN(F("cat: -p ignored because -b is missing"));	
+	}
+	if (byteView && plainMode && lineNumbers) {
+		LOGLN(F("cat: -n ignored because -bp are present"));	
+	}
+	if (flagF && flagL) {
+		if (rowIdxFirst > rowIdxLast) {
+			LOGLN(F("cat: -l cannot be smaller than -f"));
+			return;
 		}
-		String line;
-		if (byteView) { // normal mode
-			if (byteViewPlain) {
-				readChars(f, &line, limitColumn);
-				for (const char& c : line) {
-					LOGF("%02x", c);
-					LOG(F(" "));
+		if (rowIdxFirst == rowIdxLast) {
+			++rowIdxLast;
+		}
+	}
+
+
+	String bufString;
+	if (byteView && plainMode) { // here we don't care about line breaks
+		uint16_t byteIdxFirst = rowIdxFirst;
+		uint16_t byteIdxLast = rowIdxLast;
+		if (byteIdxFirst) {
+			f.seek(byteIdxFirst);
+			LOGLN(F("...>>"));
+		}
+		size_t byteCursor = byteIdxFirst;
+		while (f.available() && (!byteIdxLast || (byteCursor < byteIdxLast))) {
+			readChars(f, &bufString, limitColumn);
+			for (const char& c : bufString) {
+				if (byteIdxLast && (byteCursor >= byteIdxLast)) { // subtraction is safe as (bool)byteIdxLast == true
+					LOGLN("");
+					byteCursor = byteIdxLast; // break while loop
+					break;
 				}
-				LOGLN("");
+				LOGF("%02x", c);
+				++byteCursor;
+				LOG(byteCursor % limitColumn ? F(" ") : F("\r\n"));
+			}
+		}
+	} else { // here we count lines
+		uint16_t lineIdx = 0;
+		while (f.available() && (!rowIdxLast || lineIdx < rowIdxLast)) {
+			if (lineIdx < rowIdxFirst) {
+				readLine(f, nullptr, 0); // simply skip the line
+				if (lineIdx == 0)
+					LOGLN(F("...>>"));
 				++lineIdx;
 				continue;
-			} else {
-				bool completeLine = readLine(f, &line, limitColumn);
-				for (const char& c : line) {
-					LOGF("%02x", c);
-					LOG(F(" "));
-				}
-				if (completeLine) {
-					LOGF("%02x %02x", '\r', '\n');
-					++lineIdx;
-					continue;
-				}
 			}
-		}
-
-
-
-		if (byteView) {
-			for (uint16_t i = 0; i < line.length() && i < limitColumn; ++i) {
-				LOGF("%02x", line[i]);
-				++byteCursor;
-				if (byteCursor % limitColumn == 0) {
-					LOGLN("");
-					continue;
-				}
-				LOG(F(" "));
-			}
-			if (lineEnded) {
-				LOG("0d"); // \r
-				++byteCursor;
-				if (byteCursor % limitColumn == 0) {
-					LOGLN("");
-				}
-				LOG()
-			}
-		} else {
 			if (lineNumbers) {
-				LOG(lineIdx + 1);
+				LOG(lineIdx);
 				LOG(F("\t"));
 			}
-			LOG(line.substring(0, min((uint16_t)(line.length()-1), limitColumn)));
-			if (limitColumn < line.length()) {
-				LOGLN(F("..."));
+			bool completeLine = readLine(f, &bufString, limitColumn, nullptr, byteView);
+			if (byteView) {
+				for (uint16_t i = 0; i < limitColumn && i < bufString.length(); ++i) {
+					LOGF("%02x", bufString[i]);
+					LOG(F(" "));
+				}
 			} else {
-				LOGLN();
+				LOG(bufString);
 			}
+			if ((!completeLine && f.available()) || (bufString.length() > limitColumn)) {
+				LOG(F(" ->..."));
+			}
+			if (!completeLine)
+				readLine(f, nullptr, 0); // skip the line
+			++lineIdx;
+			LOGLN("");
 		}
-		++lineIdx;
+	}
+	if (f.available()) {
+		LOGLN(F("<<..."));
 	}
 	f.close();
 }
@@ -529,9 +543,13 @@ void DEBUG::handleCommand(uint16_t length) {
 	std::get<0>(search->second)(cmd);
 }
 
-void DEBUG::LittleFSExplorer() {
-	while (Serial.available() > 0) {
-		size_t nBytesGot = Serial.readBytesUntil('\n', lfseBuffer, LFSE_SERIAL_BUFFER_LENGTH);
+void DEBUG::LittleFSExplorer(const String& cmd) {
+	while (!cmd.isEmpty() || _UART_.available() > 0) {
+		size_t nBytesGot = cmd.isEmpty() ? _UART_.readBytesUntil('\n', lfseBuffer, LFSE_SERIAL_BUFFER_LENGTH) : 0;
+		if (!cmd.isEmpty()) {
+			for (const char& c : cmd)
+				lfseBuffer[nBytesGot++] = c;
+		}
 		if (nBytesGot == 0) {
 			LOGLN(F("Error: Could not read serial data: no valid data found!"));
 			return;
@@ -541,6 +559,9 @@ void DEBUG::LittleFSExplorer() {
 			return;
 		}
 		handleCommand(nBytesGot);
+		if (!cmd.isEmpty()) {
+			break;
+		}
 	}
 }
 
@@ -674,19 +695,23 @@ LFSECommand::Arg LFSECommand::getArgFirstFilenameOrLastArg(uint8_t startIdx) con
 	return _args[getArgFirstFilenameOrLastArgIdx(startIdx)];
 }
 
-// String s contains all chars before CRLF, but at most maxLen chars
-// String s doesn't contain CRLF
-// String s can be nullptr, then number of bytes that've been read can be accessed via strLength
-// f.position() points to the char next from the (s.length()-1)th
+// String str contains all chars before CRLF, but at most maxLen chars
+// String str doesn't contain CRLF unless addCRLF == true if returning true
+// String str can be nullptr, then number of bytes that've been read can be accessed via strLenOut
+// f.position() points to the char right after the CRLF sequence (if found), o/w to the (s.length()-1)th
 // maxLen can be 0, then there's no limit
 // ATTENTION! maxLen == 0 recommended only with str == nullptr
-// returns true if CRLF follows the (s.length()-1)th char
-bool DEBUG::readLine(File& f, String* str, uint16_t maxLen, size_t* strLength) {
+// returns true if CRLF follows the (s.length()-1)th char, false o/w
+bool DEBUG::readLine(File& f, String* str, uint16_t maxLen, size_t* strLenOut, bool addCRLF) {
 	// str can be nullptr, StringLike class handles it properly
+	// this allows cheaply skip lines using readLine(f, nullptr, 0)
 	StringLike s(str);
 	s.clear();
+
 	// problem with file
-	if (!f) {
+	if (!f || !f.available()) {
+		if (strLenOut)
+			*strLenOut = 0;
 		return false;
 	}
 
@@ -710,12 +735,13 @@ bool DEBUG::readLine(File& f, String* str, uint16_t maxLen, size_t* strLength) {
 
 	// s.length() == maxLen + 2
 	if (brokeByLen) {
-		// s cannot end with crlf
-		// even if s.last == cr, s.length is already too big,
+		// str cannot end with crlf
+		// even if str.last == cr, str.length is already too big,
 		// so in any case return false
-		f.seek(originalPosition + s.length() - 2);
 		s.cut(0, s.length() - 2);
-		if (strLength) s.length();
+		f.seek(originalPosition + s.length());
+		if (strLenOut)
+			*strLenOut = s.length();
 		return false;
 	}
 
@@ -723,23 +749,25 @@ bool DEBUG::readLine(File& f, String* str, uint16_t maxLen, size_t* strLength) {
 
 	// crlf are last 2 chars of s
 	if (brokenByCRLF) {
-		f.seek(originalPosition + s.length() - 2);
-		s.cut(0, s.length() - 2);
-		if (strLength) s.length();
+		if (!addCRLF)
+			s.cut(0, s.length() - 2);
+		if (strLenOut)
+			*strLenOut = s.length();
 		return true;
 	}
 
 	// got to the end of file without seeing crlf
 	if (d > 0) { // exceeded maxLen
-		f.seek(originalPosition + maxLen);
 		s.cut(0, maxLen);
-		if (strLength) s.length();
+		f.seek(originalPosition + maxLen);
 	}
+	if (strLenOut)
+		*strLenOut = s.length();
 	return false;
 }
 // Same as readLine, but doesn't stop on CRLF
 // returns true if got to the end of file before exceeding maxLen
-bool DEBUG::readChars(File& f, String* str, uint16_t maxLen, size_t* strLength) {
+bool DEBUG::readChars(File& f, String* str, uint16_t maxLen, size_t* strLenOut) {
 	// str can be nullptr, StringLike class handles it properly
 	StringLike s(str);
 	s.clear();
@@ -759,12 +787,14 @@ bool DEBUG::readChars(File& f, String* str, uint16_t maxLen, size_t* strLength) 
 		s += c;
 	}
 
+	if (strLenOut)
+		*strLenOut = s.length();
+
 	// s.length() == maxLen
 	if (brokeByLen) {
 		return false;
 	}
 	// went to the end of file
-	if (strLength) s.length();
 	return true;
 }
 
@@ -883,4 +913,46 @@ String LFSECommand::toString() const {
 			res += _buffer[i];
 	}
 	return res;
+}
+
+// Some debugging code
+void DEBUG::customDebugCode(const String& l) {
+	// File f = LittleFS.open(l.substring(1), "r");
+	// if (!f) {
+	// 	DLOGLN("!f");
+	// 	f.close();
+	// 	return;
+	// }
+	// String l1 = f.readStringUntil('\n');
+	// DLOGLN(l1);
+	// f.close();
+	// File fn = LittleFS.open(l.substring(1), "r");
+	// String s;
+	// size_t nb;
+	// bool cmpl = readLine(fn, &s, 5, &nb, false);
+	// DLOGLN(s.length());
+	// DLOGLN(s);
+	// DLOGLN(cmpl);
+	// fn.close();
+}
+
+template<std::size_t N, class T>
+constexpr std::size_t countof(T(&)[N]) { return N; }
+uint8_t DEBUG::_debugIdx = 0;
+void DEBUG::_debug() {
+	String cmds[] = {
+		"",
+		"ls",
+		"cat f",
+		"!f"
+	};
+	uint8_t cmdsCount = countof(cmds);
+	while (_debugIdx < cmdsCount || _UART_.available()) {
+		String l = (_debugIdx < cmdsCount) ? cmds[_debugIdx++] : _UART_.readStringUntil('\n');
+		if (l.startsWith("!")) {
+			customDebugCode(l);
+			continue;
+		}
+		LittleFSExplorer(l);
+	}
 }
