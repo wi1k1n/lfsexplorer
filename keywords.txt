@@ -1,0 +1,12 @@
+# Syntax Coloring Map For ExampleLibrary
+
+# Datatypes (KEYWORD1)
+DEBUG				KEYWORD1
+
+# Methods and Functions (KEYWORD2)
+LittleFSExplorer 	KEYWORD2
+
+# Instances (KEYWORD2)
+
+# Constants (LITERAL1)
+_UART_				LITERAL1

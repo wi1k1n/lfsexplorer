@@ -2,7 +2,7 @@
 
 std::map<String, cmdInfo> DEBUG::lfseCmdMap = {
 	cmdMapEntry("help", cmdInfo(cmdHelp, "", "show help message")),
-	cmdMapEntry("format", cmdInfo(cmdFormat, "", "format filesystem (delete all data)")),
+	cmdMapEntry("wipe", cmdInfo(cmdFormat, "-f", "delete all data from the filesystem")),
 	cmdMapEntry("ls", cmdInfo(cmdLs, "[dirpath]", "list children files/directories")),
 	cmdMapEntry("cd", cmdInfo(cmdCd, "[dirpath]", "change current working directory")),
 	cmdMapEntry("pwd", cmdInfo(cmdPwd, "", "show current working directory")),
@@ -11,7 +11,7 @@ std::map<String, cmdInfo> DEBUG::lfseCmdMap = {
 	cmdMapEntry("rm", cmdInfo(cmdRm, "[path]", "remove file/directory")),
 	cmdMapEntry("cp", cmdInfo(cmdCp, "[path_src] [path_dst]", "copy file/directory")),
 	cmdMapEntry("touch", cmdInfo(cmdTouch, "[filepath]", "create empty file")),
-	cmdMapEntry("write", cmdInfo(cmdWrite, "[\"content_args\"] [filepath]", "overwrite text content to file")),
+	cmdMapEntry("tee", cmdInfo(cmdWrite, "[\"content_args\"] [filepath]", "(over)write arguments' content to file")),
 	cmdMapEntry("cat", cmdInfo(cmdCat, "[filepath]", "print content of the file")),
 	cmdMapEntry("man", cmdInfo(cmdMan, "[command]", "show manual for command")),
 };
