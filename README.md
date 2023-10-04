@@ -51,6 +51,10 @@ Example commands:
 - `cat -bp -c8 -f1 -l9 file` - two literal flags `-b` and `-p` are used, so are numerical flags `-c`, `-f`, `l` with values `8`, `1`, `9` correspondingly
 
 ## TODO List:
+
+- compose a single header solution instead of .h/.cpp
+- refine commands to better correspond to linux toolset
+- add piping functionality
 - add command `truncate`
 - remove `touch` command
 - change `tee` behavior: `-f` flag for overwriting data from beginning of the file, default behaivor: append mode
